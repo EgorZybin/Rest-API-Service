@@ -73,6 +73,7 @@ Webhook (`webhook_url`) отправляет `POST` с JSON-envelope:
 - `POST /v1/admin/accounts/upload`
 - `POST /v1/admin/accounts/{id}/health`
 - `POST /v1/admin/accounts/health/all`
+- `POST /v1/admin/accounts/profile/all`
 
 ## Авторизация
 
