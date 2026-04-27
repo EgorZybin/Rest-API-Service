@@ -1,0 +1,37 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: sherlock
+      POSTGRES_PASSWORD: sherlock
+      POSTGRES_DB: sherlock
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sherlock -d sherlock"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: .
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DB_HOST: postgres
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./src:/app/src
+      - ./accounts:/app/accounts
+      - ./storage:/app/storage
+
+volumes:
+  postgres_data:

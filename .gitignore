@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+.env
+.env.*
+!.env.example
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+
+# App runtime
+logs/
+*.log
+accounts/
+storage/
+sessions/
+*.session
+*.session-journal
+
+# Recon artifacts
+recon/
+
+# Docker volumes
+postgres_data/
+redis_data/
