@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections import Counter
 from pathlib import Path
 from typing import Annotated
@@ -13,6 +14,10 @@ from sherlock_api.api.v1.schemas.accounts import (
     AccountHealthOut,
     AccountLoadResultOut,
     AccountOut,
+    AccountProfileOut,
+    AccountProfileRowOut,
+    AccountProfilesDashboardOut,
+    AccountProfilesStatsOut,
     AccountUpdate,
     PoolSummary,
 )
@@ -21,9 +26,10 @@ from sherlock_api.config import get_settings
 from sherlock_api.db.enums import AccountStatus
 from sherlock_api.db.models import Account
 from sherlock_api.db.session import get_session
-from sherlock_api.tg import health_check
+from sherlock_api.tg import health_check, profile_check
 
 router = APIRouter(prefix="/accounts")
+PROFILE_ALL_CONCURRENCY = 5
 
 
 @router.get("", response_model=list[AccountOut], summary="Список аккаунтов")
@@ -221,3 +227,61 @@ async def health_all(
         )
     await session.commit()
     return out
+
+
+@router.post(
+    "/profile/all",
+    response_model=AccountProfilesDashboardOut,
+    summary="Снять профиль по всем аккаунтам (удобный формат для админки)",
+)
+async def profile_all(
+    session: Annotated[AsyncSession, Depends(get_session)],
+    _: Annotated[None, Depends(require_api_key)],
+) -> AccountProfilesDashboardOut:
+    stmt = select(Account).order_by(Account.id)
+    stmt = stmt.where(Account.status != AccountStatus.dead)
+    rows = (await session.execute(stmt)).scalars().all()
+    sem = asyncio.Semaphore(PROFILE_ALL_CONCURRENCY)
+
+    async def _one(acc: Account) -> AccountProfileOut:
+        async with sem:
+            report = await profile_check(acc)
+            return AccountProfileOut(
+                account_id=acc.id,
+                phone=acc.phone,
+                ok=report.ok,
+                reason=report.reason,
+                user_id=report.user_id,
+                available_searches=report.available_searches,
+                balance=report.balance,
+                referral_balance=report.referral_balance,
+                registered_at=report.registered_at,
+                raw_text=report.raw_text,
+                elapsed_ms=report.elapsed_ms,
+            )
+
+    out = await asyncio.gather(*(_one(acc) for acc in rows))
+    rows_out = [
+        AccountProfileRowOut(
+            account_id=item.account_id,
+            phone=item.phone,
+            ok=item.ok,
+            reason=item.reason,
+            user_id=item.user_id,
+            available_searches=item.available_searches,
+            balance=item.balance,
+            referral_balance=item.referral_balance,
+            registered_at=item.registered_at,
+            elapsed_ms=item.elapsed_ms,
+        )
+        for item in out
+    ]
+    stats = AccountProfilesStatsOut(
+        total=len(out),
+        ok=sum(1 for item in out if item.ok),
+        failed=sum(1 for item in out if not item.ok),
+        total_available_searches=sum(item.available_searches or 0 for item in out),
+        total_balance=round(sum(item.balance or 0.0 for item in out), 2),
+        total_referral_balance=round(sum(item.referral_balance or 0.0 for item in out), 2),
+    )
+    return AccountProfilesDashboardOut(stats=stats, rows=rows_out)

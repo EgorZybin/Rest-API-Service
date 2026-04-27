@@ -39,9 +39,6 @@ sessions/
 *.session
 *.session-journal
 
-# Recon artifacts
-recon/
-
 # Docker volumes
 postgres_data/
 redis_data/

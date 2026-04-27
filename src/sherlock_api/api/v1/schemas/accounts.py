@@ -67,6 +67,47 @@ class AccountHealthOut(BaseModel):
     elapsed_ms: int | None = None
 
 
+class AccountProfileOut(BaseModel):
+    account_id: int
+    phone: str
+    ok: bool
+    reason: str
+    user_id: str | None = None
+    available_searches: int | None = None
+    balance: float | None = None
+    referral_balance: float | None = None
+    registered_at: str | None = None
+    raw_text: str | None = None
+    elapsed_ms: int | None = None
+
+
+class AccountProfilesStatsOut(BaseModel):
+    total: int
+    ok: int
+    failed: int
+    total_available_searches: int
+    total_balance: float
+    total_referral_balance: float
+
+
+class AccountProfileRowOut(BaseModel):
+    account_id: int
+    phone: str
+    ok: bool
+    reason: str
+    user_id: str | None = None
+    available_searches: int | None = None
+    balance: float | None = None
+    referral_balance: float | None = None
+    registered_at: str | None = None
+    elapsed_ms: int | None = None
+
+
+class AccountProfilesDashboardOut(BaseModel):
+    stats: AccountProfilesStatsOut
+    rows: list[AccountProfileRowOut]
+
+
 class PoolSummary(BaseModel):
     total: int
     by_status: dict[str, int]

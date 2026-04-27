@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import re
+import shutil
 import sqlite3
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -29,6 +32,7 @@ log = get_logger(__name__)
 
 PROBE_TIMEOUT = 15.0
 CONNECT_TIMEOUT = 25.0
+PROFILE_RESPONSE_TIMEOUT = 45.0
 _DEFAULT_DC = ("149.154.167.51", 443)
 
 _PYSOCKS_TO_PYTHON_SOCKS = {
@@ -64,11 +68,57 @@ class AccountHealthReport:
         }
 
 
+@dataclass(slots=True)
+class AccountProfileReport:
+    ok: bool
+    reason: str
+    user_id: str | None = None
+    available_searches: int | None = None
+    balance: float | None = None
+    referral_balance: float | None = None
+    registered_at: str | None = None
+    raw_text: str | None = None
+    elapsed_ms: int | None = None
+
+
 _PROXY_TYPE_MAP = {
     "http": socks.HTTP,
     "socks4": socks.SOCKS4,
     "socks5": socks.SOCKS5,
 }
+
+_RE_PROFILE_ID = re.compile(r"Ваш ID:\s*([^\n\r]+)")
+_RE_PROFILE_SEARCHES = re.compile(r"Доступно поисков:\s*(\d+)")
+_RE_PROFILE_BALANCE = re.compile(r"Ваш баланс:\s*\$?\s*([0-9]+(?:[.,][0-9]+)?)")
+_RE_PROFILE_REF_BALANCE = re.compile(
+    r"Реферальный баланс:\s*\$?\s*([0-9]+(?:[.,][0-9]+)?)"
+)
+_RE_PROFILE_REGISTERED = re.compile(r"Дата регистрации:\s*([^\n\r]+)")
+
+
+def _parse_money(raw: str | None) -> float | None:
+    if not raw:
+        return None
+    val = raw.strip().replace(",", ".")
+    try:
+        return float(val)
+    except ValueError:
+        return None
+
+
+def _parse_profile_text(text: str) -> dict[str, Any]:
+    user_id_m = _RE_PROFILE_ID.search(text)
+    searches_m = _RE_PROFILE_SEARCHES.search(text)
+    balance_m = _RE_PROFILE_BALANCE.search(text)
+    ref_balance_m = _RE_PROFILE_REF_BALANCE.search(text)
+    registered_m = _RE_PROFILE_REGISTERED.search(text)
+    return {
+        "user_id": user_id_m.group(1).strip() if user_id_m else None,
+        "available_searches": int(searches_m.group(1)) if searches_m else None,
+        "balance": _parse_money(balance_m.group(1) if balance_m else None),
+        "referral_balance": _parse_money(ref_balance_m.group(1) if ref_balance_m else None),
+        "registered_at": registered_m.group(1).strip() if registered_m else None,
+    }
 
 
 def resolve_proxy(raw: dict[str, Any] | None) -> tuple | None:
@@ -155,12 +205,14 @@ def build_client(
     *,
     connection_retries: int = 2,
     request_retries: int = 2,
+    session_path_override: str | None = None,
+    timeout_override: float | None = None,
 ) -> TelegramClient:
     settings = get_settings()
 
     if not account.api_id or not account.api_hash:
         raise AccountConnectionError(f"account {account.phone} has no api_id/api_hash")
-    if not account.session_path:
+    if not account.session_path and not session_path_override:
         raise AccountConnectionError(f"account {account.phone} has no session_path")
 
     device_kwargs: dict[str, Any] = {}
@@ -177,17 +229,31 @@ def build_client(
 
     proxy = resolve_proxy(account.proxy)
 
+    session_path = session_path_override or account.session_path
+    timeout = timeout_override or settings.account_response_timeout
+
     return TelegramClient(
-        account.session_path,
+        session_path,
         account.api_id,
         account.api_hash,
         proxy=proxy,
-        timeout=settings.account_response_timeout,
+        timeout=timeout,
         request_retries=request_retries,
         connection_retries=connection_retries,
         auto_reconnect=False,
         **device_kwargs,
     )
+
+
+def _session_sqlite_path(session_path: str | None) -> Path | None:
+    if not session_path:
+        return None
+    path = Path(session_path)
+    if path.suffix != ".session":
+        path = path.with_suffix(".session")
+    if not path.exists():
+        return None
+    return path
 
 
 async def health_check(
@@ -348,3 +414,106 @@ async def health_check(
         account.status_reason = reason
         log.exception("tg.health.unexpected", phone=account.phone)
         return AccountHealthReport(ok=False, status=account.status, reason=reason)
+
+
+async def profile_check(
+    account: Account,
+    *,
+    bot_username: str | None = None,
+) -> AccountProfileReport:
+    settings = get_settings()
+    target_bot = bot_username or settings.sherlock_bot_username
+
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+
+    original_session = _session_sqlite_path(account.session_path)
+    if original_session is None:
+        return AccountProfileReport(ok=False, reason="session file does not exist")
+
+    try:
+        with tempfile.TemporaryDirectory(prefix=f"profile-{account.id}-") as tmp_dir:
+            session_copy = Path(tmp_dir) / original_session.name
+            try:
+                shutil.copy2(original_session, session_copy)
+            except Exception as e:
+                return AccountProfileReport(
+                    ok=False,
+                    reason=f"failed to copy session file: {type(e).__name__}: {e}",
+                )
+
+            try:
+                client = build_client(
+                    account,
+                    connection_retries=0,
+                    request_retries=0,
+                    session_path_override=str(session_copy),
+                    timeout_override=PROFILE_RESPONSE_TIMEOUT,
+                )
+            except AccountConnectionError as e:
+                return AccountProfileReport(ok=False, reason=str(e))
+
+            probe_ok, probe_reason = await probe_network(account)
+            if not probe_ok:
+                return AccountProfileReport(ok=False, reason=f"proxy/network: {probe_reason}")
+
+            try:
+                await asyncio.wait_for(client.connect(), timeout=CONNECT_TIMEOUT)
+                if not await client.is_user_authorized():
+                    return AccountProfileReport(ok=False, reason="session not authorized")
+
+                async with client.conversation(target_bot, timeout=PROFILE_RESPONSE_TIMEOUT) as conv:
+                    await conv.send_message("Показать меню")
+                    menu_msg = await conv.get_response()
+
+                    profile_btn_text: str | None = None
+                    if getattr(menu_msg, "buttons", None):
+                        for row in menu_msg.buttons:
+                            for btn in row:
+                                text = str(getattr(btn, "text", "") or "")
+                                if "профил" in text.lower():
+                                    profile_btn_text = text
+                                    break
+                            if profile_btn_text:
+                                break
+                    if not profile_btn_text:
+                        return AccountProfileReport(
+                            ok=False,
+                            reason="profile button not found in menu",
+                        )
+
+                    await menu_msg.click(text=profile_btn_text)
+
+                    profile_msg = await conv.get_edit()
+                    raw_text = str(profile_msg.message or "")
+                    parsed = _parse_profile_text(raw_text)
+
+                    elapsed_ms = int((loop.time() - started) * 1000)
+                    ok = parsed["user_id"] is not None or parsed["available_searches"] is not None
+                    return AccountProfileReport(
+                        ok=ok,
+                        reason="ok" if ok else "profile info not found in bot response",
+                        user_id=parsed["user_id"],
+                        available_searches=parsed["available_searches"],
+                        balance=parsed["balance"],
+                        referral_balance=parsed["referral_balance"],
+                        registered_at=parsed["registered_at"],
+                        raw_text=raw_text or None,
+                        elapsed_ms=elapsed_ms,
+                    )
+            except (TimeoutError, asyncio.TimeoutError):
+                elapsed_ms = int((loop.time() - started) * 1000)
+                return AccountProfileReport(
+                    ok=False,
+                    reason=f"bot response timeout after {PROFILE_RESPONSE_TIMEOUT:.0f}s",
+                    elapsed_ms=elapsed_ms,
+                )
+            except Exception as e:
+                return AccountProfileReport(ok=False, reason=f"unexpected: {type(e).__name__}: {e}")
+            finally:
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
+    except Exception as e:
+        return AccountProfileReport(ok=False, reason=f"unexpected: {type(e).__name__}: {e}")
