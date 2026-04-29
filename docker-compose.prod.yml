@@ -30,7 +30,7 @@ services:
     command:
       - sh
       - -c
-      - sherlock-api db upgrade
+      - python -m sherlock_api.cli db upgrade
 
   api:
     build: .
