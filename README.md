@@ -25,6 +25,39 @@ sherlock-api dispatcher run
 Swagger: `http://localhost:8000/docs`  
 Health: `http://localhost:8000/v1/health`
 
+## Docker Compose: dev / prod
+
+### Dev (локально)
+
+```bash
+docker compose up -d --build
+docker compose logs -f api
+```
+
+- Использует `docker-compose.yml`.
+- `postgres` и `api` публикуются наружу.
+- Код из `./src` монтируется в контейнер (`hot-reload`-friendly сценарий для разработки).
+
+### Prod (сервер, публичный IP, без домена)
+
+```bash
+docker compose -f docker-compose.prod.yml up -d --build
+docker compose -f docker-compose.prod.yml logs -f api
+```
+
+- Использует `docker-compose.prod.yml`.
+- Наружу публикуется только `8000` (API).
+- `postgres` доступен только внутри docker-сети.
+- Перед запуском API автоматически выполняются миграции (`migrate` сервис).
+- Для работы поиска нужны валидные аккаунты в `./accounts`.
+
+Остановка:
+
+```bash
+docker compose down
+docker compose -f docker-compose.prod.yml down
+```
+
 ## Конфиг аккаунтов
 
 - `ACCOUNTS_DIR` — каталог с `.session + .json` (по умолчанию `./accounts`).

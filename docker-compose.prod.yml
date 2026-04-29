@@ -1,0 +1,57 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-sherlock}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-sherlock}
+      POSTGRES_DB: ${DB_NAME:-sherlock}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-sherlock} -d ${DB_NAME:-sherlock}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    build: .
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DB_HOST: postgres
+    volumes:
+      - ./alembic.ini:/app/alembic.ini:ro
+      - ./migrations:/app/migrations:ro
+    command:
+      - sh
+      - -c
+      - sherlock-api db upgrade
+
+  api:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    env_file:
+      - .env
+    environment:
+      DB_HOST: postgres
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8000
+      DISPATCHER_IN_APP: "true"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./accounts:/app/accounts
+      - ./storage:/app/storage
+
+volumes:
+  postgres_data:
