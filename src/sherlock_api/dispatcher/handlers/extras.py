@@ -53,6 +53,32 @@ from sherlock_api.parsers import (
 log = get_logger(__name__)
 
 
+class UnexpectedSimpleReportStateError(HandlerError):
+    code = "unexpected_bot_state"
+
+
+_ONBOARDING_TEXT_TOKENS = (
+    "добро пожаловать, агент",
+    "добро пожаловать",
+    "показать меню",
+)
+
+
+def _is_invalid_simple_report_payload(
+    *,
+    raw_text: str,
+    query: str | None,
+    matches: int | None,
+    interest: int | None,
+    report_url: str | None,
+    reviews_url: str | None,
+) -> bool:
+    text = (raw_text or "").strip().lower()
+    if text and any(tok in text for tok in _ONBOARDING_TEXT_TOKENS):
+        return True
+    return all(v is None for v in (query, matches, interest, report_url, reviews_url))
+
+
 async def _resolve_bot_id(ctx: HandlerContext) -> int:
     try:
         entity = await ctx.client.get_entity(ctx.bot_username)
@@ -136,6 +162,17 @@ async def _simple_report_outcome(
     flow, _bot_id, did_bs = await _send_and_collect(ctx=ctx, payload_text=payload_text, max_pages=1)
     page = _ensure_first_page(flow)
     parsed = parse_simple_report(page.text, buttons=page.buttons)
+    if _is_invalid_simple_report_payload(
+        raw_text=parsed.raw_text,
+        query=parsed.query,
+        matches=parsed.matches,
+        interest=parsed.interest,
+        report_url=parsed.report_url,
+        reviews_url=parsed.reviews_url,
+    ):
+        raise UnexpectedSimpleReportStateError(
+            "bot returned onboarding/empty response instead of a report"
+        )
     data: dict[str, Any] = {
         **parsed.to_dict(),
         "raw_text": parsed.raw_text,
