@@ -101,6 +101,24 @@ async def deactivate_account(
     return {"ok": True}
 
 
+@router.post(
+    "/{account_id}/activate",
+    summary="Активировать аккаунт",
+)
+async def activate_account(
+    account_id: int,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    _: Annotated[None, Depends(require_api_key)],
+) -> dict[str, bool]:
+    acc = await session.get(Account, account_id)
+    if acc is None:
+        raise HTTPException(status_code=404, detail="account not found")
+    acc.status = AccountStatus.idle
+    acc.status_reason = "activated via admin API"
+    await session.commit()
+    return {"ok": True}
+
+
 @router.delete(
     "/{account_id}/delete",
     summary="Полностью удалить аккаунт из БД",
@@ -232,7 +250,7 @@ async def health_all(
 @router.post(
     "/profile/all",
     response_model=AccountProfilesDashboardOut,
-    summary="Снять профиль по всем аккаунтам (удобный формат для админки)",
+    summary="Снять профиль по всем аккаунтам",
 )
 async def profile_all(
     session: Annotated[AsyncSession, Depends(get_session)],

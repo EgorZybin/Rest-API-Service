@@ -191,7 +191,7 @@ async def stream_task(
 @router.get(
     "/{task_id}/interactions",
     response_model=list[TgInteractionOut],
-    summary=("Append-only audit trail of every TG event the worker saw for this task"),
+    summary="Журнал всех TG-событий по задаче",
 )
 async def get_task_interactions(
     task_id: uuid.UUID,
