@@ -88,7 +88,14 @@ _PROXY_TYPE_MAP = {
 }
 
 _RE_PROFILE_ID = re.compile(r"Ваш ID:\s*([^\n\r]+)")
-_RE_PROFILE_SEARCHES = re.compile(r"Доступно поисков:\s*(\d+)")
+_RE_PROFILE_SEARCHES = re.compile(
+    r"(?:Доступно|Осталось)\s+(?:поисков|запросов)\s*:\s*(\d+)",
+    re.IGNORECASE,
+)
+_RE_PROFILE_SEARCHES_FALLBACK = re.compile(
+    r"(?:поиск|запрос)[^\d]{0,20}(\d+)",
+    re.IGNORECASE,
+)
 _RE_PROFILE_BALANCE = re.compile(r"Ваш баланс:\s*\$?\s*([0-9]+(?:[.,][0-9]+)?)")
 _RE_PROFILE_REF_BALANCE = re.compile(
     r"Реферальный баланс:\s*\$?\s*([0-9]+(?:[.,][0-9]+)?)"
@@ -108,7 +115,9 @@ def _parse_money(raw: str | None) -> float | None:
 
 def _parse_profile_text(text: str) -> dict[str, Any]:
     user_id_m = _RE_PROFILE_ID.search(text)
-    searches_m = _RE_PROFILE_SEARCHES.search(text)
+    searches_m = _RE_PROFILE_SEARCHES.search(text) or _RE_PROFILE_SEARCHES_FALLBACK.search(
+        text
+    )
     balance_m = _RE_PROFILE_BALANCE.search(text)
     ref_balance_m = _RE_PROFILE_REF_BALANCE.search(text)
     registered_m = _RE_PROFILE_REGISTERED.search(text)
