@@ -12,6 +12,7 @@ from sherlock_api.dispatcher.handlers.base import (
     HandlerPermanentError,
     register_handler,
 )
+from sherlock_api.dispatcher.handlers.report_txt_fetch import merge_report_txt_if_present
 from sherlock_api.dispatcher.handlers.schemas import (
     NickSearchInput,
     PhoneSearchInput,
@@ -19,6 +20,7 @@ from sherlock_api.dispatcher.handlers.schemas import (
     validate_input,
 )
 from sherlock_api.logging import get_logger
+from sherlock_api.parsers import parse_simple_report
 
 log = get_logger(__name__)
 
@@ -49,6 +51,7 @@ async def _run_and_pack(
     payload_photo: str | Path | None = None,
     choice_button_text: str | None = None,
     max_pages: int,
+    full_web_report: bool = False,
 ) -> HandlerOutcome:
     bot_id = await _resolve_bot_id(ctx)
 
@@ -78,13 +81,27 @@ async def _run_and_pack(
     data = flow.to_merged()
     data["account_id"] = ctx.account.id
     data["bootstrap_performed"] = did_bootstrap
-    return HandlerOutcome(
-        data=data,
-        meta={
-            "pages": len(flow.pages),
-            "has_media": any(p.media_path for p in flow.pages),
-        },
-    )
+
+    meta: dict[str, Any] = {
+        "pages": len(flow.pages),
+        "has_media": any(p.media_path for p in flow.pages),
+    }
+    if full_web_report:
+        report_url = reviews_url = None
+        if flow.pages:
+            sp = parse_simple_report(
+                flow.pages[0].text or "",
+                buttons=flow.pages[0].buttons,
+            )
+            report_url, reviews_url = sp.report_url, sp.reviews_url
+        meta["has_report_url"] = report_url is not None
+        if report_url:
+            data["report_url"] = report_url
+        if reviews_url:
+            data["reviews_url"] = reviews_url
+        await merge_report_txt_if_present(data)
+
+    return HandlerOutcome(data=data, meta=meta)
 
 
 @register_handler("phone_search")
@@ -96,6 +113,7 @@ async def phone_search_handler(ctx: HandlerContext) -> HandlerOutcome:
         ctx=ctx,
         payload_text=inp.phone,
         max_pages=inp.max_pages,
+        full_web_report=True,
     )
 
 

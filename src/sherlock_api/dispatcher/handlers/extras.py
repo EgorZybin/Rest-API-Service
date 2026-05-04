@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import httpx
 from telethon.errors import (
     BotResponseTimeoutError,
     FloodWaitError,
@@ -27,6 +26,7 @@ from sherlock_api.dispatcher.handlers.base import (
     HandlerRateLimitError,
     register_handler,
 )
+from sherlock_api.dispatcher.handlers.report_txt_fetch import merge_report_txt_if_present
 from sherlock_api.dispatcher.handlers.schemas import (
     AddressSearchInput,
     CadastreSearchInput,
@@ -133,27 +133,6 @@ def _ensure_first_page(flow: FlowResult) -> RawBotMessage:
     return flow.pages[0]
 
 
-_REPORT_TXT_HARD_CAP_BYTES = 5_000_000  # 5 MiB
-_REPORT_TXT_TIMEOUT = 30.0
-
-
-async def _fetch_report_txt(url: str) -> tuple[str | None, bool]:
-    full = url.rstrip("/") + "/txt"
-    try:
-        async with httpx.AsyncClient(timeout=_REPORT_TXT_TIMEOUT, follow_redirects=True) as client:
-            r = await client.get(full)
-            r.raise_for_status()
-            body = r.text
-    except Exception as e:
-        log.warning("extras.report_txt_fetch_failed", url=full, err=repr(e))
-        return None, False
-    truncated = False
-    if len(body.encode("utf-8")) > _REPORT_TXT_HARD_CAP_BYTES:
-        truncated = True
-        body = body.encode("utf-8")[:_REPORT_TXT_HARD_CAP_BYTES].decode("utf-8", errors="ignore")
-    return body, truncated
-
-
 async def _simple_report_outcome(
     *,
     ctx: HandlerContext,
@@ -179,10 +158,7 @@ async def _simple_report_outcome(
         "account_id": ctx.account.id,
         "bootstrap_performed": did_bs,
     }
-    if parsed.report_url:
-        body, truncated = await _fetch_report_txt(parsed.report_url)
-        data["report_txt"] = body
-        data["report_txt_truncated"] = truncated
+    await merge_report_txt_if_present(data)
     return HandlerOutcome(
         data=data,
         meta={
