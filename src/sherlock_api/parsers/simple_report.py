@@ -16,6 +16,10 @@ _QUERY_RE = re.compile(r"Запрос\s*:\s*(.+?)(?:\n|$)")
 
 _REPORT_BUTTON_PREFIX = "Открыть полный отчет"
 _REVIEWS_BUTTON_TOKENS = ("Комментарии", "Отзывы", "Reviews")
+_PROFILE_CTA_PREFIXES = (
+    "Открыть профиль",
+    "Перейти в диалог",
+)
 
 
 @dataclass(slots=True)
@@ -70,6 +74,16 @@ def _find_button_url(
     return None
 
 
+def find_profile_cta_button_url(
+    buttons: list[list[dict[str, Any]]] | None,
+) -> str | None:
+    for pref in _PROFILE_CTA_PREFIXES:
+        u = _find_button_url(buttons, text_prefix=pref)
+        if u:
+            return u
+    return None
+
+
 def parse_simple_report(
     text: str,
     *,
@@ -89,4 +103,4 @@ def parse_simple_report(
     )
 
 
-__all__ = ["SimpleReport", "parse_simple_report"]
+__all__ = ["SimpleReport", "find_profile_cta_button_url", "parse_simple_report"]

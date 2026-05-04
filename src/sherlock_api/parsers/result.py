@@ -4,6 +4,8 @@ import re
 from dataclasses import dataclass, field, fields
 from typing import Any, Iterable
 
+from sherlock_api.parsers.simple_report import find_profile_cta_button_url
+
 PAGE_NOOP_CALLBACK = "noop"
 
 _LOADING_PATTERNS = (
@@ -90,6 +92,9 @@ class SherlockResult:
     username: str | None = None
     link: str | None = None
     person: str | None = None
+
+    website_url: str | None = None
+    profile_url: str | None = None
 
     extra: dict[str, Any] = field(default_factory=dict)
     raw_fields: dict[str, Any] = field(default_factory=dict)
@@ -179,16 +184,51 @@ def _iter_label_lines(text: str) -> Iterable[tuple[str, str]]:
         yield label, value
 
 
-def _extract_url_for_label(
-    label: str, value_text: str, entities: list[dict[str, Any]] | None
+def _utf16_slice(text: str, offset: int, length: int) -> str:
+    raw = text.encode("utf-16-le")
+    start, end = offset * 2, (offset + length) * 2
+    if start < 0 or end > len(raw) or start > end:
+        raise ValueError("bad utf-16 span")
+    return raw[start:end].decode("utf-16-le")
+
+
+def _find_url_matching_displayed_text(
+    full_text: str,
+    entities: list[dict[str, Any]] | None,
+    displayed: str,
 ) -> str | None:
-    if not entities:
+    want = (displayed or "").strip()
+    if not entities or not want:
         return None
-    for e in reversed(entities):
+    for e in entities:
         et = e.get("type")
-        if et in {"MessageEntityTextUrl", "MessageEntityUrl"}:
+        off, ln = e.get("offset"), e.get("length")
+        if off is None or ln is None:
+            continue
+        try:
+            frag = _utf16_slice(full_text, int(off), int(ln)).strip()
+        except (ValueError, UnicodeDecodeError):
+            continue
+        if frag != want:
+            continue
+        if et == "MessageEntityTextUrl":
             return e.get("url") or None
+        if et == "MessageEntityUrl":
+            return frag or None
     return None
+
+
+def _extract_url_for_label(
+    full_text: str, value_text: str, entities: list[dict[str, Any]] | None
+) -> str | None:
+    return _find_url_matching_displayed_text(
+        full_text, entities, (value_text or "").strip()
+    )
+
+
+def _label_is_site_line(label: str) -> bool:
+    l = (label or "").strip().lower()
+    return l == "сайт" or l.endswith(" сайт")
 
 
 def parse_result_message(
@@ -223,16 +263,22 @@ def parse_result_message(
         coerced = _coerce_value(key or label, value)
 
         if key == "link" and isinstance(coerced, str):
-            url = _extract_url_for_label(label, value, entities)
+            url = _extract_url_for_label(text, value, entities)
             coerced = url or coerced
 
         if key and hasattr(res, key):
             setattr(res, key, coerced)
         else:
             res.raw_fields[label] = coerced
+            if res.website_url is None and _label_is_site_line(label) and isinstance(coerced, str):
+                u = _find_url_matching_displayed_text(text, entities, coerced)
+                if u:
+                    res.website_url = u
 
     for label, value in _iter_label_lines(extra_part):
         res.extra[label] = value.strip()
+
+    res.profile_url = find_profile_cta_button_url(buttons)
 
     return ParsedPage(result=res, pagination=pagination, is_loading=False)
 

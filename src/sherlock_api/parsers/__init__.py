@@ -15,7 +15,11 @@ from sherlock_api.parsers.result import (
     is_paywall_message,
     parse_result_message,
 )
-from sherlock_api.parsers.simple_report import SimpleReport, parse_simple_report
+from sherlock_api.parsers.simple_report import (
+    SimpleReport,
+    find_profile_cta_button_url,
+    parse_simple_report,
+)
 from sherlock_api.parsers.tag import (
     TagCountryButton,
     TagPageSummary,
@@ -40,6 +44,7 @@ __all__ = [
     "extract_country_buttons",
     "extract_pagination",
     "find_country_button",
+    "find_profile_cta_button_url",
     "is_loading_message",
     "is_paywall_message",
     "parse_domain_ip",
