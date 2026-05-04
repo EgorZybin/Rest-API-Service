@@ -25,6 +25,24 @@ from sherlock_api.parsers import parse_simple_report
 log = get_logger(__name__)
 
 
+def _normalize_vk_profile_url(raw: str) -> str:
+    """Ссылка на профиль VK для отправки боту."""
+    s = (raw or "").strip()
+    if not s:
+        raise HandlerPermanentError("vk profile input is empty")
+    low = s.lower()
+    if low.startswith("http://"):
+        return "https://" + s[7:].lstrip("/")
+    if low.startswith("https://"):
+        return s
+    if s.startswith("//"):
+        return "https:" + s
+    if "vk.com" in low or "vkontakte.ru" in low:
+        return "https://" + s.lstrip("/")
+    slug = s.lstrip("/").removeprefix("vk.com/").removeprefix("m.vk.com/")
+    return f"https://vk.com/{slug.lstrip('/')}"
+
+
 def _media_dir_for_task(task_id: Any) -> Path:
     settings = get_settings()
     root = Path(getattr(settings, "storage_dir", "storage")).resolve()
@@ -122,15 +140,20 @@ async def nick_search_handler(ctx: HandlerContext) -> HandlerOutcome:
     inp: NickSearchInput = validate_input(
         "nick_search", ctx.task.input
     )
-    button_by_source = {
-        "instagram": "Instagram",
-        "tiktok": "Tiktok",
-        "telegram": "Telegram",
-    }
+    if inp.search_in == "vk":
+        payload_text = _normalize_vk_profile_url(inp.nick)
+        choice_button_text = None
+    else:
+        payload_text = inp.nick
+        choice_button_text = {
+            "instagram": "Instagram",
+            "tiktok": "Tiktok",
+            "telegram": "Telegram",
+        }[inp.search_in]
     return await _run_and_pack(
         ctx=ctx,
-        payload_text=inp.nick,
-        choice_button_text=button_by_source[inp.search_in],
+        payload_text=payload_text,
+        choice_button_text=choice_button_text,
         max_pages=inp.max_pages,
     )
 

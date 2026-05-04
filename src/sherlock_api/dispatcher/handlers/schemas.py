@@ -49,14 +49,20 @@ class NickSearchInput(_ScenarioInput):
     nick: str = Field(
         ...,
         min_length=2,
-        max_length=128,
-        description=("Ник, username Telegram или числовой id."),
-        examples=["@raizzep", "raizzep", "5136214812"],
+        max_length=512,
+        description=(
+            "Ник / id / ссылка: для instagram, tiktok, telegram — ник или @handle; "
+            "для vk — URL профиля (https://vk.com/…)."
+        ),
+        examples=["@raizzep", "raizzep", "5136214812", "https://vk.com/raizzep"],
     )
     max_pages: int = Field(default=1, ge=1, le=50)
-    search_in: Literal["instagram", "tiktok", "telegram"] = Field(
+    search_in: Literal["instagram", "tiktok", "telegram", "vk"] = Field(
         default="telegram",
-        description=("Где продолжить поиск после выбора источника."),
+        description=(
+            "Платформа: instagram / tiktok / telegram — после ответа бота жмём соответствующую кнопку; "
+            "vk — сразу отправляем ссылку на профиль ВК, без выбора в inline."
+        ),
     )
 
     @field_validator("nick")

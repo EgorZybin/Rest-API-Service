@@ -150,7 +150,7 @@ async def enqueue_phone_search(
 @router.post(
     "/nick",
     response_model=TaskEnqueueResponse,
-    summary="Поставить в очередь поиск по нику / user-id",
+    summary="Поставить в очередь поиск по нику / user-id / ссылке VK",
 )
 async def enqueue_nick_search(
     payload: NickSearchRequest,

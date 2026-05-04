@@ -172,16 +172,44 @@ def _coerce_value(label_key: str, value: str) -> Any:
 _LINE_PREFIX_STRIP = "├└│─-•— 🧩🕵️🔎"
 
 
+def _is_likely_new_field_line(line: str) -> bool:
+    if ":" not in line or " -> " in line:
+        return False
+    left, _, right = line.partition(":")
+    ls = left.strip().lower()
+    if len(ls) < 2 or ls.startswith("http"):
+        return False
+    return True
+
+
 def _iter_label_lines(text: str) -> Iterable[tuple[str, str]]:
-    for line in text.splitlines():
-        s = line.strip().lstrip(_LINE_PREFIX_STRIP).strip()
+    raw = text.splitlines()
+    i, n = 0, len(raw)
+    while i < n:
+        s = raw[i].strip().lstrip(_LINE_PREFIX_STRIP).strip()
+        i += 1
         if not s or ":" not in s:
             continue
         label, _, value = s.partition(":")
         label = label.strip().lower().lstrip(_LINE_PREFIX_STRIP).strip()
         if not label:
             continue
-        yield label, value
+        parts: list[str] = []
+        v0 = value.strip()
+        if v0:
+            parts.append(v0)
+        else:
+            while i < n:
+                nxt = raw[i].strip().lstrip(_LINE_PREFIX_STRIP).strip()
+                if not nxt:
+                    i += 1
+                    continue
+                if _is_likely_new_field_line(nxt):
+                    break
+                parts.append(nxt)
+                i += 1
+        full = "\n".join(parts).strip()
+        yield label, full
 
 
 def _utf16_slice(text: str, offset: int, length: int) -> str:
