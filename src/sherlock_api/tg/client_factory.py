@@ -265,6 +265,11 @@ def _session_sqlite_path(session_path: str | None) -> Path | None:
     return path
 
 
+def _is_sqlite_locked_error(exc: BaseException) -> bool:
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return "database is locked" in text
+
+
 async def health_check(
     account: Account,
     *,
@@ -299,6 +304,7 @@ async def health_check(
             reason=account.status_reason,
         )
 
+    session_copy_ctx: tempfile.TemporaryDirectory[str] | None = None
     try:
         try:
             await asyncio.wait_for(client.connect(), timeout=CONNECT_TIMEOUT)
@@ -310,6 +316,29 @@ async def health_check(
             account.status = AccountStatus.unauthorized
             account.status_reason = reason
             return AccountHealthReport(ok=False, status=account.status, reason=reason)
+        except Exception as e:
+            if not _is_sqlite_locked_error(e):
+                raise
+
+            original_session = _session_sqlite_path(account.session_path)
+            if original_session is None:
+                raise
+
+            log.warning("tg.health.sqlite_locked", phone=account.phone, err=repr(e))
+            session_copy_ctx = tempfile.TemporaryDirectory(prefix=f"health-{account.id}-")
+            session_copy = Path(session_copy_ctx.name) / original_session.name
+            shutil.copy2(original_session, session_copy)
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
+            client = build_client(
+                account,
+                connection_retries=0,
+                request_retries=0,
+                session_path_override=str(session_copy),
+            )
+            await asyncio.wait_for(client.connect(), timeout=CONNECT_TIMEOUT)
         except (
             AuthKeyUnregisteredError,
             AuthKeyDuplicatedError,
@@ -417,6 +446,8 @@ async def health_check(
             )
         finally:
             await client.disconnect()
+            if session_copy_ctx is not None:
+                session_copy_ctx.cleanup()
     except Exception as e:
         reason = f"unexpected: {type(e).__name__}: {e}"
         account.status = AccountStatus.dead
