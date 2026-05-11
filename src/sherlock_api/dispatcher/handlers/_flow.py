@@ -171,7 +171,11 @@ def _next_callback(
         "следующая страница",
         "next",
         ">",
+        ">>",
         "›",
+        "❯",
+        "❱",
+        "»",
         "→",
     }
     for row in buttons:
