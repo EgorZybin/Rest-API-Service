@@ -67,6 +67,13 @@ class AccountHealthOut(BaseModel):
     elapsed_ms: int | None = None
 
 
+class AccountHealthAllOut(BaseModel):
+    total: int
+    checked: int
+    busy_skipped_count: int
+    rows: list[AccountHealthOut]
+
+
 class AccountProfileOut(BaseModel):
     account_id: int
     phone: str

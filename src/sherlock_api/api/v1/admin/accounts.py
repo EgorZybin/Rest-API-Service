@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sherlock_api.accounts.loader import load_accounts
 from sherlock_api.api.v1.schemas.accounts import (
+    AccountHealthAllOut,
     AccountHealthOut,
     AccountLoadResultOut,
     AccountOut,
@@ -217,18 +218,44 @@ async def account_health(
     )
 
 
-@router.post("/health/all", response_model=list[AccountHealthOut], summary="Проверить все аккаунты")
+@router.post(
+    "/health/all",
+    response_model=AccountHealthAllOut,
+    summary="Проверить все аккаунты",
+)
 async def health_all(
     session: Annotated[AsyncSession, Depends(get_session)],
     _: Annotated[None, Depends(require_api_key)],
     include_dead: Annotated[bool, Query()] = False,
-) -> list[AccountHealthOut]:
+    probe_busy: Annotated[
+        bool,
+        Query(
+            description=(
+                "Если false (по умолчанию), аккаунты со статусом busy не трогаются "
+                "сетевым health-check, чтобы не конкурировать за session sqlite."
+            )
+        ),
+    ] = False,
+) -> AccountHealthAllOut:
     stmt = select(Account).order_by(Account.id)
     if not include_dead:
         stmt = stmt.where(Account.status != AccountStatus.dead)
     rows = (await session.execute(stmt)).scalars().all()
     out: list[AccountHealthOut] = []
+    busy_skipped_count = 0
     for acc in rows:
+        if acc.status == AccountStatus.busy and not probe_busy:
+            busy_skipped_count += 1
+            out.append(
+                AccountHealthOut(
+                    account_id=acc.id,
+                    phone=acc.phone,
+                    ok=True,
+                    status=acc.status,
+                    reason="skipped: account is busy (set probe_busy=true to force check)",
+                )
+            )
+            continue
         report = await health_check(acc)
         out.append(
             AccountHealthOut(
@@ -244,7 +271,12 @@ async def health_all(
             )
         )
     await session.commit()
-    return out
+    return AccountHealthAllOut(
+        total=len(rows),
+        checked=len(rows) - busy_skipped_count,
+        busy_skipped_count=busy_skipped_count,
+        rows=out,
+    )
 
 
 @router.post(
