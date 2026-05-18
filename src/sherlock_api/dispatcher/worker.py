@@ -4,7 +4,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import select, text
+from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from sherlock_api.config import Settings
@@ -83,6 +83,7 @@ class AccountWorker:
 
     async def _run(self) -> None:
         log.info("worker.start", account_id=self.account_id)
+        cancelled = False
         try:
             while not self._stop.is_set():
                 handled = await self._tick()
@@ -92,12 +93,58 @@ class AccountWorker:
                     except asyncio.TimeoutError:
                         pass
         except asyncio.CancelledError:
+            cancelled = True
             log.info("worker.cancelled", account_id=self.account_id)
-            raise
         except Exception:
             log.exception("worker.crashed", account_id=self.account_id)
         finally:
+            try:
+                await self._sanitize_state()
+            except Exception:
+                log.exception("worker.sanitize_failed", account_id=self.account_id)
             log.info("worker.stop", account_id=self.account_id)
+        if cancelled:
+            raise asyncio.CancelledError()
+
+    async def _sanitize_state(self) -> None:
+        """Roll back any in-flight rows owned by this worker.
+
+        Runs in worker `_run`'s finally. Uses a fresh session so it survives
+        even if the worker's previous session was poisoned by the same fault
+        that caused the exit. Best-effort: any failure is logged by the caller
+        and the periodic sanitiser in DispatcherManager will pick up the slack.
+        """
+        now = datetime.now(timezone.utc)
+        async with self._session_factory() as session:
+            try:
+                await session.execute(
+                    update(Task)
+                    .where(Task.account_id == self.account_id)
+                    .where(Task.status == TaskStatus.running)
+                    .values(
+                        status=TaskStatus.pending,
+                        account_id=None,
+                        started_at=None,
+                        error_code="worker_exited",
+                        error_message=(
+                            f"worker for account {self.account_id} exited "
+                            f"without finishing task at {now.isoformat()}"
+                        ),
+                    )
+                )
+                await session.execute(
+                    update(Account)
+                    .where(Account.id == self.account_id)
+                    .where(Account.status == AccountStatus.busy)
+                    .values(
+                        status=AccountStatus.idle,
+                        status_reason="worker exited; reverted by worker self-sanitise",
+                    )
+                )
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
 
     async def _tick(self) -> bool:
         async with self._session_factory() as session:
