@@ -25,7 +25,11 @@ from sherlock_api.dispatcher.handlers.schemas import (
 )
 from sherlock_api.logging import get_logger
 from sherlock_api.parsers import parse_simple_report
-from sherlock_api.tg.resolve import any_account_has_resolve_quota, try_resolve_for_nick_search
+from sherlock_api.tg.resolve import (
+    TelegramResolveNotFoundError,
+    any_account_has_resolve_quota,
+    try_resolve_for_nick_search,
+)
 
 log = get_logger(__name__)
 
@@ -150,12 +154,39 @@ async def nick_search_handler(ctx: HandlerContext) -> HandlerOutcome:
         "nick_search", ctx.task.input
     )
     if inp.search_in == "telegram":
-        resolved = await try_resolve_for_nick_search(
-            client=ctx.client,
-            account=ctx.account,
-            session=ctx.session,
-            nick=inp.nick,
-        )
+        try:
+            resolved = await try_resolve_for_nick_search(
+                client=ctx.client,
+                account=ctx.account,
+                session=ctx.session,
+                nick=inp.nick,
+            )
+        except TelegramResolveNotFoundError as e:
+            log.info(
+                "nick_search.telegram.mtproto_not_found",
+                account_id=ctx.account.id,
+                reason=e.reason,
+                nick=inp.nick,
+            )
+            out_data: dict[str, Any] = {
+                "results": [],
+                "resolve_method": "mtproto",
+                "not_found": True,
+                "not_found_reason": e.reason,
+                "nick": inp.nick,
+                "account_id": ctx.account.id,
+            }
+            if e.detail:
+                out_data["not_found_detail"] = e.detail
+            return HandlerOutcome(
+                data=out_data,
+                meta={
+                    "resolve_method": "mtproto",
+                    "not_found": True,
+                    "not_found_reason": e.reason,
+                    **({"not_found_detail": e.detail} if e.detail else {}),
+                },
+            )
         if resolved is not None:
             log.info(
                 "nick_search.telegram.mtproto",
@@ -166,11 +197,8 @@ async def nick_search_handler(ctx: HandlerContext) -> HandlerOutcome:
             return HandlerOutcome(
                 data={
                     "results": [resolved.to_result_dict()],
-                    "pages_collected": 0,
-                    "pagination_total": None,
                     "resolve_method": "mtproto",
                     "account_id": ctx.account.id,
-                    "bootstrap_performed": False,
                 },
                 meta={"resolve_method": "mtproto", "via_username_resolve": resolved.via_username_resolve},
             )

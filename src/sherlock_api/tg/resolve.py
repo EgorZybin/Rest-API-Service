@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from telethon import TelegramClient
 from telethon.errors import (
     FloodWaitError,
+    UserIdInvalidError,
     UsernameInvalidError,
     UsernameNotOccupiedError,
 )
@@ -30,6 +31,20 @@ if TYPE_CHECKING:
     pass
 
 log = get_logger(__name__)
+
+
+class TelegramResolveNotFoundError(Exception):
+    """MTProto resolve succeeded syntactically but there is no such user/username."""
+
+    def __init__(self, *, reason: str, nick: str, detail: str | None = None) -> None:
+        self.reason = reason
+        self.nick = nick
+        self.detail = detail
+        msg = f"telegram resolve not found ({reason}): {nick!r}"
+        if detail:
+            msg = f"{msg} — {detail}"
+        super().__init__(msg)
+
 
 _TME_RE = re.compile(
     r"^(?:https?://)?(?:www\.)?t\.me/(?P<slug>[A-Za-z0-9_]{5,32})/?$",
@@ -152,13 +167,19 @@ async def any_account_has_resolve_quota(
     return any(not resolve_day_cap_reached(acc, settings) for acc in rows)
 
 
-def _entity_to_resolved(entity: User, *, via_username_resolve: bool) -> ResolvedTelegramUser:
+def _entity_to_resolved(entity: Any, *, via_username_resolve: bool, nick: str) -> ResolvedTelegramUser:
     if not isinstance(entity, User):
-        raise HandlerPermanentError(
-            f"resolved entity is not a user: {type(entity).__name__}"
+        raise TelegramResolveNotFoundError(
+            reason="entity_not_user",
+            nick=nick,
+            detail=f"resolved to {type(entity).__name__}, expected User",
         )
     if entity.deleted:
-        raise HandlerPermanentError("telegram user is deleted")
+        raise TelegramResolveNotFoundError(
+            reason="user_deleted",
+            nick=nick,
+            detail="user is deleted",
+        )
 
     return ResolvedTelegramUser(
         user_id=int(entity.id),
@@ -183,11 +204,29 @@ async def resolve_telegram_nick(
     except FloodWaitError as e:
         raise HandlerRateLimitError(f"FloodWait {e.seconds}s on resolve username") from e
     except UsernameNotOccupiedError as e:
-        raise HandlerPermanentError(f"telegram username not occupied: {nick!r}") from e
+        raise TelegramResolveNotFoundError(
+            reason="username_not_occupied",
+            nick=nick,
+            detail=str(e) or None,
+        ) from e
     except UsernameInvalidError as e:
-        raise HandlerPermanentError(f"telegram username invalid: {nick!r}") from e
+        raise TelegramResolveNotFoundError(
+            reason="username_invalid",
+            nick=nick,
+            detail=str(e) or None,
+        ) from e
+    except UserIdInvalidError as e:
+        raise TelegramResolveNotFoundError(
+            reason="user_id_invalid",
+            nick=nick,
+            detail=str(e) or None,
+        ) from e
     except ValueError as e:
-        raise HandlerPermanentError(f"telegram nick not found: {nick!r}") from e
+        raise TelegramResolveNotFoundError(
+            reason="peer_not_found",
+            nick=nick,
+            detail=str(e) or None,
+        ) from e
     except HandlerPermanentError:
         raise
     except Exception as e:
@@ -195,7 +234,9 @@ async def resolve_telegram_nick(
             f"telegram resolve failed: {type(e).__name__}: {e}"
         ) from e
 
-    return _entity_to_resolved(entity, via_username_resolve=username is not None)
+    return _entity_to_resolved(
+        entity, via_username_resolve=username is not None, nick=nick
+    )
 
 
 async def try_resolve_for_nick_search(
@@ -230,7 +271,11 @@ async def try_resolve_for_nick_search(
         )
         return None
 
-    resolved = await resolve_telegram_nick(client, nick)
+    try:
+        resolved = await resolve_telegram_nick(client, nick)
+    except TelegramResolveNotFoundError:
+        note_resolve_username_request(account)
+        raise
     if resolved.via_username_resolve:
         note_resolve_username_request(account)
     return resolved
