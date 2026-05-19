@@ -8,6 +8,7 @@ from sherlock_api.dispatcher.handlers.base import (
     HandlerOutcome,
     HandlerPermanentError,
     HandlerRateLimitError,
+    HandlerResolveAccountQuotaError,
     HandlerSubscriptionError,
     register_handler,
 )
@@ -41,6 +42,7 @@ __all__ = [
     "HandlerOutcome",
     "HandlerPermanentError",
     "HandlerRateLimitError",
+    "HandlerResolveAccountQuotaError",
     "HandlerSubscriptionError",
     "address_search_handler",
     "cadastre_search_handler",

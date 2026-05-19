@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     account_requests_per_hour: int = 30
     account_cooldown_seconds: int = 5
     account_response_timeout: int = 60
+    account_resolve_username_per_day: int = 150
 
     sherlock_bot_username: str = "@SherlockBot"
 

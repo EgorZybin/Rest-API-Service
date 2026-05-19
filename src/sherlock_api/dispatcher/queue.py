@@ -7,7 +7,7 @@ from typing import Any, Iterable
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sherlock_api.db.enums import TaskStatus
+from sherlock_api.db.enums import AccountStatus, TaskStatus
 from sherlock_api.db.models import Task
 from sherlock_api.logging import get_logger
 
@@ -46,6 +46,7 @@ class TaskQueue:
         *,
         account_id: int,
         supported_scenarios: Iterable[str] | None = None,
+        account_status: AccountStatus | None = None,
     ) -> Task | None:
         scenarios = list(supported_scenarios) if supported_scenarios else None
 
@@ -59,6 +60,9 @@ class TaskQueue:
         )
         if scenarios:
             stmt = stmt.where(Task.scenario.in_(scenarios))
+        if account_status == AccountStatus.subscription_expired:
+            stmt = stmt.where(Task.scenario == "nick_search")
+            stmt = stmt.where(Task.input["search_in"].as_string() == "telegram")
 
         task = (await session.execute(stmt)).scalar_one_or_none()
         if task is None:

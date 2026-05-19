@@ -59,6 +59,10 @@ class Account(Base, TimestampMixin):
         DateTime(timezone=True), nullable=True
     )
     last_request_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolve_requests_today: Mapped[int] = mapped_column(default=0, nullable=False)
+    resolve_window_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     last_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 

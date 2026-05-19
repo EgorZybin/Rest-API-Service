@@ -19,7 +19,11 @@ from sherlock_api.logging import get_logger
 
 log = get_logger(__name__)
 
-_LIVE_STATUSES = {AccountStatus.idle, AccountStatus.busy}
+_LIVE_STATUSES = {
+    AccountStatus.idle,
+    AccountStatus.busy,
+    AccountStatus.subscription_expired,
+}
 RECONCILE_INTERVAL = 15.0
 SANITISER_INTERVAL = 300.0
 SUPERVISOR_BACKOFF_MAX = 30.0

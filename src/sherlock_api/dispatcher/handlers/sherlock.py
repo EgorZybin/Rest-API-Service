@@ -4,12 +4,16 @@ from pathlib import Path
 from typing import Any
 
 from sherlock_api.config import get_settings
+from sherlock_api.db.enums import AccountStatus
+from sherlock_api.db.models import Account
 from sherlock_api.dispatcher.handlers._bootstrap import ensure_bootstrapped
 from sherlock_api.dispatcher.handlers._flow import FlowResult, run_query_flow
 from sherlock_api.dispatcher.handlers.base import (
     HandlerContext,
+    HandlerError,
     HandlerOutcome,
     HandlerPermanentError,
+    HandlerResolveAccountQuotaError,
     register_handler,
 )
 from sherlock_api.dispatcher.handlers.report_txt_fetch import merge_report_txt_if_present
@@ -21,6 +25,7 @@ from sherlock_api.dispatcher.handlers.schemas import (
 )
 from sherlock_api.logging import get_logger
 from sherlock_api.parsers import parse_simple_report
+from sherlock_api.tg.resolve import any_account_has_resolve_quota, try_resolve_for_nick_search
 
 log = get_logger(__name__)
 
@@ -135,11 +140,58 @@ async def phone_search_handler(ctx: HandlerContext) -> HandlerOutcome:
     )
 
 
+def _can_use_sherlock_bot(account: Account) -> bool:
+    return account.status != AccountStatus.subscription_expired
+
+
 @register_handler("nick_search")
 async def nick_search_handler(ctx: HandlerContext) -> HandlerOutcome:
     inp: NickSearchInput = validate_input(
         "nick_search", ctx.task.input
     )
+    if inp.search_in == "telegram":
+        resolved = await try_resolve_for_nick_search(
+            client=ctx.client,
+            account=ctx.account,
+            session=ctx.session,
+            nick=inp.nick,
+        )
+        if resolved is not None:
+            log.info(
+                "nick_search.telegram.mtproto",
+                account_id=ctx.account.id,
+                user_id=resolved.user_id,
+                username=resolved.username,
+            )
+            return HandlerOutcome(
+                data={
+                    "results": [resolved.to_result_dict()],
+                    "pages_collected": 0,
+                    "pagination_total": None,
+                    "resolve_method": "mtproto",
+                    "account_id": ctx.account.id,
+                    "bootstrap_performed": False,
+                },
+                meta={"resolve_method": "mtproto", "via_username_resolve": resolved.via_username_resolve},
+            )
+
+        if not _can_use_sherlock_bot(ctx.account):
+            if ctx.session is not None and await any_account_has_resolve_quota(ctx.session):
+                raise HandlerResolveAccountQuotaError(
+                    f"account {ctx.account.id} cannot use sherlock bot; "
+                    "trying another account for mtproto resolve"
+                )
+            raise HandlerError(
+                "resolve pool exhausted on subscription_expired account; "
+                "requeueing for sherlock-capable account"
+            )
+
+        log.info(
+            "nick_search.telegram.fallback_sherlock_bot",
+            account_id=ctx.account.id,
+            nick=inp.nick,
+        )
+
     if inp.search_in == "vk":
         payload_text = _normalize_vk_profile_url(inp.nick)
         choice_button_text = None
@@ -150,12 +202,16 @@ async def nick_search_handler(ctx: HandlerContext) -> HandlerOutcome:
             "tiktok": "Tiktok",
             "telegram": "Telegram",
         }[inp.search_in]
-    return await _run_and_pack(
+    outcome = await _run_and_pack(
         ctx=ctx,
         payload_text=payload_text,
         choice_button_text=choice_button_text,
         max_pages=inp.max_pages,
     )
+    if inp.search_in == "telegram":
+        outcome.data["resolve_method"] = "sherlock_bot"
+        outcome.meta["resolve_method"] = "sherlock_bot"
+    return outcome
 
 
 @register_handler("photo_search")

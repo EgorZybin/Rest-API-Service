@@ -58,6 +58,7 @@ class AccountWorker:
 
         self._client: TelegramClient | None = None
         self._client_needs_connect = True
+        self._idle_restore_status = AccountStatus.idle
 
     def start(self) -> None:
         if self._task is not None and not self._task.done():
@@ -153,7 +154,10 @@ class AccountWorker:
                 await session.commit()
                 return False
 
-            if account.status != AccountStatus.idle:
+            if account.status not in {
+                AccountStatus.idle,
+                AccountStatus.subscription_expired,
+            }:
                 return False
 
             wait = self._cooldown_remaining(account)
@@ -162,7 +166,10 @@ class AccountWorker:
                 await self._sleep_interruptible(wait)
                 return True
 
-            if self._hour_cap_reached(account):
+            if (
+                account.status != AccountStatus.subscription_expired
+                and self._hour_cap_reached(account)
+            ):
                 resume_in = self._seconds_to_next_hour(account)
                 await session.commit()
                 log.debug(
@@ -177,11 +184,13 @@ class AccountWorker:
                 session,
                 account_id=self.account_id,
                 supported_scenarios=self._supported,
+                account_status=account.status,
             )
             if task is None:
                 await session.commit()
                 return False
 
+            self._idle_restore_status = account.status
             account.status = AccountStatus.busy
             account.status_reason = f"running task {task.id}"
             await session.commit()
@@ -241,6 +250,7 @@ class AccountWorker:
                 task=task,
                 bot_username=self._settings.sherlock_bot_username,
                 audit=audit_sink,
+                session=session,
             )
 
             try:
@@ -414,7 +424,7 @@ class AccountWorker:
         reason: str | None = None,
     ) -> None:
         if idle:
-            account.status = AccountStatus.idle
+            account.status = status or self._idle_restore_status
             account.status_reason = reason or "idle"
         else:
             account.status = status or AccountStatus.paused

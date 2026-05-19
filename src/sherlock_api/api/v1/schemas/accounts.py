@@ -29,6 +29,7 @@ class AccountOut(BaseModel):
     subscription_expires_at: datetime | None
     requests_total: int
     requests_last_hour: int
+    resolve_requests_today: int = 0
     last_request_at: datetime | None
     last_error_at: datetime | None
     last_error: str | None
